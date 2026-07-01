@@ -857,6 +857,7 @@ dependencies = [
  "embassy-rp",
  "embassy-time",
  "panic-probe",
+ "smart-leds",
 ]
 
 [[package]]

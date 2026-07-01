@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+smart-leds = "0.4.0"
 embassy-executor = { version = "0.9", features = [
   "arch-cortex-m",
   "executor-thread",
