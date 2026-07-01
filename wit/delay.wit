@@ -1,0 +1,9 @@
+package local:delay;
+
+interface delay {
+    delay-ms: func(ms: u32);
+}
+
+world host-delay {
+    import delay;
+}

@@ -1,0 +1,8 @@
+[package]
+name = "host-delay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wasmtime = { version = "41.0.1", default-features = false, features = ["component-model"] }
+embassy-time = "0.5.0"

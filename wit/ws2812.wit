@@ -1,0 +1,17 @@
+package local:leds;
+
+interface ws2812 {
+    record color {
+        r: u8,
+        g: u8,
+        b: u8,
+    }
+
+    resource led-strip {
+        write: func(colors: list<color>);
+    }
+}
+
+world host-ws2812 {
+    import ws2812;
+}

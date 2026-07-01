@@ -1,0 +1,9 @@
+package local:guest;
+
+world app {
+    use local:leds/ws2812.{led-strip};
+    import local:leds/ws2812;
+    import local:delay/delay;
+
+    export run: func(strip: borrow<led-strip>);
+}

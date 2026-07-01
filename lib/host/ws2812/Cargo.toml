@@ -1,0 +1,18 @@
+[package]
+name = "host-ws2812"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Required for the bindgen macro and Resource types
+wasmtime = { version = "41.0.1", default-features = false, features = ["component-model"] }
+
+# Required for RGB8
+smart-leds = "0.4.0"
+
+# Required for PioWs2812 and PIO0 types
+embassy-rp = { version = "0.9.0", features = ["rp235xa"] }
+
+# Required for block_on
+embassy-futures = "0.1.2"
+embassy-time = "0.5.0"
