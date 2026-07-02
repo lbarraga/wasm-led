@@ -9,6 +9,7 @@ interface ws2812 {
 
     resource led-strip {
         write: func(colors: list<color>);
+        get-led-amount: func() -> u32;
     }
 }
 

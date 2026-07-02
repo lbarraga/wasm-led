@@ -1,7 +1,6 @@
 #![no_std]
 extern crate alloc;
-
-use alloc::vec::Vec;
+use alloc::vec;
 
 wit_bindgen::generate!({
     path: "wit",
@@ -9,31 +8,40 @@ wit_bindgen::generate!({
     generate_all
 });
 
-use local::leds::ws2812::Color;
-// --> Import the generated guest delay function
 use local::delay::delay::delay_ms;
+use local::leds::ws2812::Color;
 
 struct MainApp;
 
 impl Guest for MainApp {
     fn run(strip: &LedStrip) {
-        let green = Color { r: 0, g: 50, b: 0 };
-        let off = Color { r: 0, g: 0, b: 0 };
+        let led_amount = strip.get_led_amount() as usize;
 
-        let mut greens = Vec::with_capacity(100);
-        let mut offs = Vec::with_capacity(100);
+        let red = Color { r: 50, g: 0, b: 0 };
+        let white = Color {
+            r: 50,
+            g: 50,
+            b: 50,
+        };
 
-        for _ in 0..100 {
-            greens.push(green);
-            offs.push(off);
-        }
+        let mut colors = vec![white; led_amount];
 
-        // Blink 5 times
         loop {
-            strip.write(&greens);
-            delay_ms(500); // 500ms delay
-            strip.write(&offs);
-            delay_ms(500); // 500ms delay
+            // front to back loop
+            for i in 0..led_amount {
+                colors[i] = red;
+                strip.write(&colors);
+                delay_ms(50);
+                colors[i] = white;
+            }
+
+            // back to front loop
+            for i in (0..led_amount).rev() {
+                colors[i] = red;
+                strip.write(&colors);
+                delay_ms(50);
+                colors[i] = white;
+            }
         }
     }
 }

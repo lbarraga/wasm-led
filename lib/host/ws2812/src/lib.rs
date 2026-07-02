@@ -18,9 +18,11 @@ pub struct ActiveStrip;
 
 pub trait LedDriver {
     fn write_colors(&mut self, colors: &[RGB8]);
+    // New requirement for the hardware driver
+    fn get_led_amount(&self) -> u32;
 }
 
-// --- The Hardware Implementation (Now Encapsulated in the Library) ---
+// --- The Hardware Implementation (Encapsulated in the Library) ---
 pub struct EmbassyWs2812Driver<
     'd,
     P: embassy_rp::pio::Instance,
@@ -28,7 +30,7 @@ pub struct EmbassyWs2812Driver<
     const N: usize,
     ORDER: RgbColorOrder,
 > {
-    #[allow(dead_code)] // Keep driver alive to ensure PIO state machine isn't dropped
+    #[allow(dead_code)]
     _driver: PioWs2812<'d, P, S, N, ORDER>,
 }
 
@@ -44,7 +46,6 @@ impl<'d, P: embassy_rp::pio::Instance, const S: usize, const N: usize, ORDER: Rg
     LedDriver for EmbassyWs2812Driver<'d, P, S, N, ORDER>
 {
     fn write_colors(&mut self, colors: &[RGB8]) {
-        // Hardcoded hardware addresses for RP2350 (and RP2040) PIO0
         const PIO0_BASE: u32 = 0x5020_0000;
         const PIO0_FSTAT: *const u32 = (PIO0_BASE + 0x04) as *const u32;
 
@@ -52,12 +53,11 @@ impl<'d, P: embassy_rp::pio::Instance, const S: usize, const N: usize, ORDER: Rg
         let txf_addr = (PIO0_BASE + txf_offset) as *mut u32;
         let txfull_bit = 1_u32 << (16 + S as u32);
 
-        // Iterate over the slice directly - no try_into() needed!
         for color in colors {
             let r = color.r as u32;
             let g = color.g as u32;
             let b = color.b as u32;
-            let word = (g << 24) | (r << 16) | (b << 8); // Standard GRB format
+            let word = (g << 24) | (r << 16) | (b << 8);
 
             unsafe {
                 while core::ptr::read_volatile(PIO0_FSTAT) & txfull_bit != 0 {}
@@ -66,6 +66,10 @@ impl<'d, P: embassy_rp::pio::Instance, const S: usize, const N: usize, ORDER: Rg
         }
 
         embassy_time::block_for(embassy_time::Duration::from_micros(55));
+    }
+
+    fn get_led_amount(&self) -> u32 {
+        N as u32
     }
 }
 
@@ -88,13 +92,25 @@ impl<D: LedDriver + Send + 'static> HostLedStrip for Ws2812Ctx<D> {
             .get(&rep)
             .expect("Guest passed an invalid resource handle");
 
-        const NUM_LEDS: usize = 100;
-        let mut fixed_array = [RGB8::default(); NUM_LEDS];
-        for (i, c) in colors.into_iter().enumerate().take(NUM_LEDS) {
-            fixed_array[i] = RGB8::new(c.r, c.g, c.b);
+        let max_leds = self.driver.get_led_amount() as usize;
+
+        // Dynamically size the vector instead of hardcoding 100
+        let mut rgb_colors = Vec::with_capacity(colors.len().min(max_leds));
+        for c in colors.into_iter().take(max_leds) {
+            rgb_colors.push(RGB8::new(c.r, c.g, c.b));
         }
 
-        self.driver.write_colors(&fixed_array);
+        self.driver.write_colors(&rgb_colors);
+    }
+
+    // Pass the WIT method call through to the trait
+    fn get_led_amount(&mut self, rep: Resource<ActiveStrip>) -> u32 {
+        let _ = self
+            .table
+            .get(&rep)
+            .expect("Guest passed an invalid resource handle");
+
+        self.driver.get_led_amount()
     }
 
     fn drop(&mut self, rep: Resource<ActiveStrip>) -> wasmtime::Result<()> {
