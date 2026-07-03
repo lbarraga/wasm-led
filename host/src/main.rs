@@ -9,7 +9,7 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
-use embedded_alloc::Heap;
+use embedded_alloc::LlffHeap as Heap;
 use {defmt_rtt as _, panic_probe as _};
 
 use wasmtime::component::{Component, Linker, ResourceTable};
