@@ -28,7 +28,7 @@ defmt = "1.0.1"
 defmt-rtt = "1.0"
 
 embedded-alloc = "0.7.0"
-wasmtime = { version = "41.0.1", default-features = false, features = ["runtime", "pulley", "component-model"] }
+wasmtime = { version = "46.0.1", default-features = false, features = ["runtime", "pulley", "component-model"] }
 
 host-ws2812 = { path = "../lib/host/ws2812" }
 host-delay = { path = "../lib/host/delay" }
