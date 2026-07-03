@@ -5,6 +5,9 @@ MEMORY {
      * 2 MiB is a safe default here, although a Pico 2 has 4 MiB.
      */
     FLASH : ORIGIN = 0x10000000, LENGTH = 2048K
+
+    WASM_FLASH : ORIGIN = 0x10180000, LENGTH = 512K
+
     /*
      * RAM consists of 8 banks, SRAM0-SRAM7, with a striped mapping.
      * This is usually good for performance, as it distributes load on
@@ -70,6 +73,16 @@ SECTIONS {
     } > FLASH
 
 } INSERT AFTER .uninit;
+
+
+SECTIONS {
+    .wasm_storage (NOLOAD) : ALIGN(4096)
+    {
+        __wasm_storage_start = .;
+        *(.wasm_storage)
+        __wasm_storage_end = .;
+    } > WASM_FLASH
+}
 
 PROVIDE(start_to_end = __end_block_addr - __start_block_addr);
 PROVIDE(end_to_start = __start_block_addr - __end_block_addr);
