@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # Required for the bindgen macro and Resource types
-wasmtime = { version = "46.0.1", default-features = false, features = ["component-model"] }
+wasmtime = { version = "41.0.1", default-features = false, features = ["component-model"] }
 
 # Required for RGB8
 smart-leds = "0.4.0"

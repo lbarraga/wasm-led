@@ -18,7 +18,6 @@ fn main() -> anyhow::Result<()> {
     let mut config = Config::new();
     config.target("pulley32")?;
     config.wasm_component_model(true);
-    config.async_support(false);
     config.wasm_gc(false);
     config.wasm_function_references(false);
     config.gc_support(false);

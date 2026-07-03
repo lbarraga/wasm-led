@@ -28,10 +28,16 @@ defmt = "1.0.1"
 defmt-rtt = "1.0"
 
 embedded-alloc = "0.7.0"
-wasmtime = { version = "46.0.1", default-features = false, features = ["runtime", "pulley", "component-model"] }
+embedded-io-async = "0.7.0"
+wasmtime = { version = "41.0.1", default-features = false, features = ["runtime", "pulley", "component-model"] }
 
 host-ws2812 = { path = "../lib/host/ws2812" }
 host-delay = { path = "../lib/host/delay" }
+
+cyw43 = { version = "0.7.0", features = ["defmt", "firmware-logs"] }
+cyw43-pio = { version = "0.10.0", features = ["defmt"] }
+embassy-net = { version = "0.9.1", features = ["defmt", "tcp", "dhcpv4", "medium-ethernet"] }
+static_cell = "2.1.0"
 
 [[bin]]
 name = "host"
