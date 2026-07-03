@@ -26,6 +26,7 @@ wasmtime::component::bindgen!({
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<embassy_rp::peripherals::DMA_CH0>;
 });
 
 const HEAP_SIZE: usize = 470 * 1024;
@@ -78,7 +79,7 @@ async fn main(_spawner: Spawner) {
     let program = PioWs2812Program::new(&mut common);
 
     let ws2812: PioWs2812<'_, _, 0, 100, _> =
-        PioWs2812::new(&mut common, sm0, p.DMA_CH0, p.PIN_16, &program);
+        PioWs2812::new(&mut common, sm0, p.DMA_CH0, Irqs, p.PIN_16, &program);
 
     // Give the raw Embassy driver to the library to encapsulate it
     let encapsulated_driver = EmbassyWs2812Driver::new(ws2812);
