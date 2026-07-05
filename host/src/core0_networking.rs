@@ -4,15 +4,18 @@ use cyw43::aligned_bytes;
 use cyw43_pio::PioSpi;
 use defmt::{info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_net::tcp::TcpSocket;
+use embassy_net::dns::DnsSocket;
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{Config, StackResources};
 use embassy_rp::flash::{Async, Flash};
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::{FLASH, PIO0};
 use embassy_time::{Duration, Timer};
-use embedded_io_async::Write;
+use embedded_io_async::Read;
 use embedded_storage_async::nor_flash::NorFlash;
+use reqwless::client::HttpClient;
+use reqwless::request::Method;
 use static_cell::StaticCell;
 
 use crate::{WASM_LEN, WASM_PTR};
@@ -60,9 +63,7 @@ fn parse_flash_uri(buf: &[u8]) -> Result<ParsedUri<'_>, &'static str> {
 
     let (ip_str, port_str) = ip_port.split_once(':').unwrap_or((ip_port, "80"));
 
-    // Utilizing FromStr for clean, idiomatic parsing
     let ip: embassy_net::Ipv4Address = ip_str.parse().map_err(|_| "Invalid IPv4 address format")?;
-
     let port: u16 = port_str.parse().map_err(|_| "Bad port number")?;
 
     Ok(ParsedUri {
@@ -94,11 +95,11 @@ pub async fn run_core0(
         .await;
 
     let net_config = Config::dhcpv4(Default::default());
-    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
     let (stack, net_runner) = embassy_net::new(
         net_device,
         net_config,
-        RESOURCES.init(StackResources::<2>::new()),
+        RESOURCES.init(StackResources::<3>::new()),
         0x0123_4567_89ab_cdef,
     );
     spawner.spawn(unwrap!(net_task(net_runner)));
@@ -134,104 +135,94 @@ pub async fn run_core0(
     match parse_flash_uri(&uri_buf) {
         Ok(parsed) => {
             info!("Connecting to IP: {}, Port: {}...", parsed.ip, parsed.port);
-            let mut rx_buffer = [0; 2048];
-            let mut tx_buffer = [0; 2048];
-            let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-            socket.set_timeout(Some(Duration::from_secs(10)));
 
-            if socket
-                .connect(embassy_net::IpEndpoint::new(parsed.ip.into(), parsed.port))
-                .await
-                .is_ok()
-            {
-                let request = format!(
-                    "GET /{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                    parsed.path, parsed.ip_str
-                );
-                socket.write_all(request.as_bytes()).await.unwrap();
-                socket.flush().await.unwrap();
+            let mut tcp_state = TcpClientState::<1, 2048, 2048>::new();
+            let tcp_client = TcpClient::new(stack, &tcp_state);
+            let dns_client = DnsSocket::new(stack);
 
-                let mut current_offset = WASM_OFFSET;
-                let mut total_bytes_written = 0;
-                let mut page_buf = [0u8; 4096];
-                let mut page_idx = 0;
-                let mut header_buf = [0u8; 1024];
-                let mut header_len = 0;
-                let mut body_start = 0;
+            // Standard HTTP client (No TLS context provided)
+            let mut client = HttpClient::new(&tcp_client, &dns_client);
 
-                loop {
-                    if let Ok(n) = socket.read(&mut header_buf[header_len..]).await {
-                        if n == 0 {
-                            break;
-                        }
-                        header_len += n;
-                        if let Some(pos) = header_buf[..header_len]
-                            .windows(4)
-                            .position(|w| w == b"\r\n\r\n")
-                        {
-                            body_start = pos + 4;
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
+            let url = format!("http://{}:{}/{}", parsed.ip_str, parsed.port, parsed.path);
+            info!("Requesting OTA via reqwless: {}", url.as_str());
 
-                if header_buf[..header_len].windows(6).any(|w| w == b"200 OK") {
-                    for &byte in &header_buf[body_start..header_len] {
-                        page_buf[page_idx] = byte;
-                        page_idx += 1;
-                    }
+            let mut rx_buf = [0; 4096];
+            match client.request(Method::GET, &url).await {
+                Ok(mut request) => {
+                    match request.send(&mut rx_buf).await {
+                        Ok(response) => {
+                            if response.status.is_successful() {
+                                let mut current_offset = WASM_OFFSET;
+                                let mut total_bytes_written = 0;
 
-                    let mut temp_rx_buf = [0u8; 1024];
-                    loop {
-                        match socket.read(&mut temp_rx_buf).await {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                for &byte in &temp_rx_buf[..n] {
-                                    page_buf[page_idx] = byte;
-                                    page_idx += 1;
-                                    if page_idx == 4096 {
-                                        flash
-                                            .erase(current_offset, current_offset + 4096)
-                                            .await
-                                            .unwrap();
-                                        flash.write(current_offset, &page_buf).await.unwrap();
-                                        current_offset += 4096;
-                                        total_bytes_written += 4096;
-                                        page_idx = 0;
-                                        page_buf.fill(0);
+                                let mut page_buf = [0u8; 4096];
+                                let mut page_idx = 0;
+
+                                let mut body_reader = response.body().reader();
+                                let mut temp_rx_buf = [0u8; 1024];
+
+                                loop {
+                                    match body_reader.read(&mut temp_rx_buf).await {
+                                        Ok(0) => break, // Stream complete
+                                        Ok(n) => {
+                                            for &byte in &temp_rx_buf[..n] {
+                                                page_buf[page_idx] = byte;
+                                                page_idx += 1;
+
+                                                if page_idx == 4096 {
+                                                    flash
+                                                        .erase(
+                                                            current_offset,
+                                                            current_offset + 4096,
+                                                        )
+                                                        .await
+                                                        .unwrap();
+                                                    flash
+                                                        .write(current_offset, &page_buf)
+                                                        .await
+                                                        .unwrap();
+
+                                                    current_offset += 4096;
+                                                    total_bytes_written += 4096;
+                                                    page_idx = 0;
+                                                    page_buf.fill(0);
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            warn!("Network error reading body");
+                                            break;
+                                        }
                                     }
                                 }
+
+                                // Flush any remaining bytes
+                                if page_idx > 0 {
+                                    flash
+                                        .erase(current_offset, current_offset + 4096)
+                                        .await
+                                        .unwrap();
+                                    flash.write(current_offset, &page_buf).await.unwrap();
+                                    total_bytes_written += page_idx;
+                                }
+
+                                info!(
+                                    "OTA Download complete! Total bytes: {}",
+                                    total_bytes_written
+                                );
+
+                                ota_success = true;
+                                WASM_PTR.store(WASM_FLASH_PTR as usize, Ordering::Release);
+                                WASM_LEN.store(total_bytes_written, Ordering::Release);
+                                cortex_m::asm::sev();
+                            } else {
+                                warn!("Error: Server returned status {:?}", response.status);
                             }
-                            Err(_) => break,
                         }
+                        Err(_) => warn!("Error: Failed to receive HTTP response"),
                     }
-
-                    if page_idx > 0 {
-                        flash
-                            .erase(current_offset, current_offset + 4096)
-                            .await
-                            .unwrap();
-                        flash.write(current_offset, &page_buf).await.unwrap();
-                        total_bytes_written += page_idx;
-                    }
-
-                    info!(
-                        "OTA Download complete! Total bytes: {}",
-                        total_bytes_written
-                    );
-                    socket.close();
-
-                    ota_success = true;
-                    WASM_PTR.store(WASM_FLASH_PTR as usize, Ordering::Release);
-                    WASM_LEN.store(total_bytes_written, Ordering::Release);
-                    cortex_m::asm::sev();
-                } else {
-                    warn!("Error: Server did not return 200 OK.");
                 }
-            } else {
-                warn!("Failed to connect to the Wasm URI Server.");
+                Err(_) => warn!("Error: Failed to build or send HTTP request"),
             }
         }
         Err(e) => info!("{}", e),

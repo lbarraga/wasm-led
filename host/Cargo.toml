@@ -38,7 +38,8 @@ host-delay = { path = "../lib/host/delay" }
 
 cyw43 = { version = "0.7.0", features = ["defmt", "firmware-logs"] }
 cyw43-pio = { version = "0.10.0", features = ["defmt"] }
-embassy-net = { version = "0.9.1", features = ["defmt", "tcp", "udp", "dhcpv4", "medium-ethernet"] }
+embassy-net = { version = "0.9.1", features = ["defmt", "tcp", "udp", "dhcpv4", "medium-ethernet", "dns"] }
+reqwless = { version = "0.14.0", default-features = false, features = ["defmt", "alloc"] }
 static_cell = "2.1.0"
 
 [[bin]]
