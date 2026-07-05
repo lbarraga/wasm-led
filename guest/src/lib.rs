@@ -17,12 +17,8 @@ impl Guest for MainApp {
     fn run(strip: &LedStrip) {
         let led_amount = strip.get_led_amount() as usize;
 
-        let white = Color { r: 50, g: 0, b: 50 };
-        let red = Color {
-            r: 50,
-            g: 50,
-            b: 50,
-        };
+        let white = Color { r: 10, g: 0, b: 0 };
+        let red = Color { r: 0, g: 0, b: 50 };
 
         let mut colors = vec![white; led_amount];
 

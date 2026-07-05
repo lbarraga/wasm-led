@@ -37,41 +37,12 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
     runner.run().await
 }
 
-/// Holds the safely extracted components of our XIP Flash URI
+/// Holds the safely extracted components of the Flash URI
 struct ParsedUri<'a> {
     ip: embassy_net::Ipv4Address,
     port: u16,
     ip_str: &'a str,
     path: &'a str,
-}
-
-/// Reads the raw bytes and returns a clean struct or a descriptive error
-fn parse_flash_uri(buf: &[u8]) -> Result<ParsedUri<'_>, &'static str> {
-    let uri_len = buf.iter().position(|&b| b == 0 || b == 0xFF).unwrap_or(0);
-    if uri_len == 0 {
-        return Err("No valid URI found in flash.");
-    }
-
-    let uri =
-        core::str::from_utf8(&buf[..uri_len]).map_err(|_| "Flash URI contains invalid UTF-8")?;
-
-    info!("Found URI in Flash: {}", uri);
-
-    let (ip_port, path) = uri
-        .split_once('/')
-        .ok_or("URI is missing the '/' separating host and path")?;
-
-    let (ip_str, port_str) = ip_port.split_once(':').unwrap_or((ip_port, "80"));
-
-    let ip: embassy_net::Ipv4Address = ip_str.parse().map_err(|_| "Invalid IPv4 address format")?;
-    let port: u16 = port_str.parse().map_err(|_| "Bad port number")?;
-
-    Ok(ParsedUri {
-        ip,
-        port,
-        ip_str,
-        path,
-    })
 }
 
 pub async fn run_core0(
@@ -105,19 +76,17 @@ pub async fn run_core0(
     spawner.spawn(unwrap!(net_task(net_runner)));
 
     info!("Joining WiFi network...");
-    loop {
-        if control
-            .join(
-                env!("WIFI_SSID"),
-                cyw43::JoinOptions::new(env!("WIFI_PASS").as_bytes()),
-            )
-            .await
-            .is_ok()
-        {
-            break;
-        }
+    while control
+        .join(
+            env!("WIFI_SSID"),
+            cyw43::JoinOptions::new(env!("WIFI_PASS").as_bytes()),
+        )
+        .await
+        .is_err()
+    {
         Timer::after(Duration::from_secs(1)).await;
     }
+
     stack.wait_config_up().await;
     info!(
         "Network up! Assigned IP: {}",
@@ -136,105 +105,30 @@ pub async fn run_core0(
         Ok(parsed) => {
             info!("Connecting to IP: {}, Port: {}...", parsed.ip, parsed.port);
 
-            let mut tcp_state = TcpClientState::<1, 2048, 2048>::new();
-            let tcp_client = TcpClient::new(stack, &tcp_state);
-            let dns_client = DnsSocket::new(stack);
+            match perform_ota(&parsed, stack, &mut flash).await {
+                Ok(total_bytes) => {
+                    info!("OTA Download complete! Total bytes: {}", total_bytes);
+                    ota_success = true;
 
-            // Standard HTTP client (No TLS context provided)
-            let mut client = HttpClient::new(&tcp_client, &dns_client);
-
-            let url = format!("http://{}:{}/{}", parsed.ip_str, parsed.port, parsed.path);
-            info!("Requesting OTA via reqwless: {}", url.as_str());
-
-            let mut rx_buf = [0; 4096];
-            match client.request(Method::GET, &url).await {
-                Ok(mut request) => {
-                    match request.send(&mut rx_buf).await {
-                        Ok(response) => {
-                            if response.status.is_successful() {
-                                let mut current_offset = WASM_OFFSET;
-                                let mut total_bytes_written = 0;
-
-                                let mut page_buf = [0u8; 4096];
-                                let mut page_idx = 0;
-
-                                let mut body_reader = response.body().reader();
-                                let mut temp_rx_buf = [0u8; 1024];
-
-                                loop {
-                                    match body_reader.read(&mut temp_rx_buf).await {
-                                        Ok(0) => break, // Stream complete
-                                        Ok(n) => {
-                                            for &byte in &temp_rx_buf[..n] {
-                                                page_buf[page_idx] = byte;
-                                                page_idx += 1;
-
-                                                if page_idx == 4096 {
-                                                    flash
-                                                        .erase(
-                                                            current_offset,
-                                                            current_offset + 4096,
-                                                        )
-                                                        .await
-                                                        .unwrap();
-                                                    flash
-                                                        .write(current_offset, &page_buf)
-                                                        .await
-                                                        .unwrap();
-
-                                                    current_offset += 4096;
-                                                    total_bytes_written += 4096;
-                                                    page_idx = 0;
-                                                    page_buf.fill(0);
-                                                }
-                                            }
-                                        }
-                                        Err(_) => {
-                                            warn!("Network error reading body");
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                // Flush any remaining bytes
-                                if page_idx > 0 {
-                                    flash
-                                        .erase(current_offset, current_offset + 4096)
-                                        .await
-                                        .unwrap();
-                                    flash.write(current_offset, &page_buf).await.unwrap();
-                                    total_bytes_written += page_idx;
-                                }
-
-                                info!(
-                                    "OTA Download complete! Total bytes: {}",
-                                    total_bytes_written
-                                );
-
-                                ota_success = true;
-                                WASM_PTR.store(WASM_FLASH_PTR as usize, Ordering::Release);
-                                WASM_LEN.store(total_bytes_written, Ordering::Release);
-                                cortex_m::asm::sev();
-                            } else {
-                                warn!("Error: Server returned status {:?}", response.status);
-                            }
-                        }
-                        Err(_) => warn!("Error: Failed to receive HTTP response"),
-                    }
+                    // Signal Core 1
+                    WASM_PTR.store(WASM_FLASH_PTR as usize, Ordering::Release);
+                    WASM_LEN.store(total_bytes, Ordering::Release);
+                    cortex_m::asm::sev();
                 }
-                Err(_) => warn!("Error: Failed to build or send HTTP request"),
+                Err(e) => warn!("OTA Aborted: {}", e),
             }
         }
         Err(e) => info!("{}", e),
     }
 
+    // Fallback wasm binary if it could not download one
     if !ota_success {
         info!("OTA failed or skipped. Booting the embedded fallback Wasm binary...");
         let fallback_wasm = include_bytes!("guest.pulley");
 
         WASM_PTR.store(fallback_wasm.as_ptr() as usize, Ordering::Release);
         WASM_LEN.store(fallback_wasm.len(), Ordering::Release);
-        cortex_m::asm::sev();
+        cortex_m::asm::sev(); // Wake up Core 1
     }
 
     let mut rx_meta = [PacketMetadata::EMPTY; 3];
@@ -257,8 +151,9 @@ pub async fn run_core0(
                     clean_uri
                 );
 
-                let mut page_buf = [0u8; 4096];
+                let mut page_buf = [0xFFu8; 4096];
                 page_buf[..clean_uri.len()].copy_from_slice(clean_uri.as_bytes());
+                page_buf[clean_uri.len()] = 0;
 
                 flash
                     .erase(CONFIG_OFFSET, CONFIG_OFFSET + 4096)
@@ -270,4 +165,111 @@ pub async fn run_core0(
             }
         }
     }
+}
+
+fn parse_flash_uri(buf: &[u8]) -> Result<ParsedUri<'_>, &'static str> {
+    let uri_len = buf
+        .iter()
+        .position(|&b| b == 0 || b == 0xFF)
+        .unwrap_or(buf.len());
+    if uri_len == 0 {
+        return Err("No valid URI found in flash.");
+    }
+
+    let uri =
+        core::str::from_utf8(&buf[..uri_len]).map_err(|_| "Flash URI contains invalid UTF-8")?;
+
+    info!("Found URI in Flash: {}", uri);
+
+    let (ip_port, path) = uri
+        .split_once('/')
+        .ok_or("URI is missing the '/' separating host and path")?;
+
+    let (ip_str, port_str) = ip_port.split_once(':').unwrap_or((ip_port, "80"));
+
+    let ip: embassy_net::Ipv4Address = ip_str.parse().map_err(|_| "Invalid IPv4 address format")?;
+    let port: u16 = port_str.parse().map_err(|_| "Bad port number")?;
+
+    Ok(ParsedUri {
+        ip,
+        port,
+        ip_str,
+        path,
+    })
+}
+
+/// Downloads the OTA binary over HTTP and streams it directly into XIP flash memory
+async fn perform_ota(
+    parsed: &ParsedUri<'_>,
+    stack: embassy_net::Stack<'static>,
+    flash: &mut Flash<'static, FLASH, Async, { 2 * 1024 * 1024 }>,
+) -> Result<usize, &'static str> {
+    let tcp_state = TcpClientState::<1, 2048, 2048>::new();
+    let tcp_client = TcpClient::new(stack, &tcp_state);
+    let dns_client = DnsSocket::new(stack);
+
+    let mut client = HttpClient::new(&tcp_client, &dns_client);
+
+    let url = format!("http://{}:{}/{}", parsed.ip_str, parsed.port, parsed.path);
+    info!("Requesting OTA via reqwless: {}", url.as_str());
+
+    let mut rx_buf = [0; 4096];
+
+    let mut request = client
+        .request(Method::GET, &url)
+        .await
+        .map_err(|_| "Failed to build HTTP request")?;
+
+    let response = request
+        .send(&mut rx_buf)
+        .await
+        .map_err(|_| "Failed to receive HTTP response")?;
+
+    if !response.status.is_successful() {
+        warn!("Error: Server returned status {:?}", response.status);
+        return Err("Server returned non-200 OK status");
+    }
+
+    let mut current_offset = WASM_OFFSET;
+    let mut total_bytes_written = 0;
+
+    let mut page_buf = [0xFFu8; 4096];
+    let mut page_idx = 0;
+    let mut is_eof = false;
+
+    let mut body_reader = response.body().reader();
+
+    // Stream the wasm binary into the flash memory in chunks as to not exhaust RAM
+    while !is_eof {
+        let n = body_reader
+            .read(&mut page_buf[page_idx..])
+            .await
+            .map_err(|_| "Network error reading body")?;
+
+        if n == 0 {
+            is_eof = true;
+        }
+
+        page_idx += n;
+
+        // Write to flash if the buffer is full, OR if we've hit the end of the stream
+        if page_idx == 4096 || (is_eof && page_idx > 0) {
+            flash
+                .erase(current_offset, current_offset + 4096)
+                .await
+                .map_err(|_| "Flash erase failed")?;
+
+            flash
+                .write(current_offset, &page_buf)
+                .await
+                .map_err(|_| "Flash write failed")?;
+
+            current_offset += 4096;
+            total_bytes_written += page_idx;
+            page_idx = 0;
+            page_buf.fill(0xFF);
+        }
+    }
+
+    Ok(total_bytes_written)
 }
