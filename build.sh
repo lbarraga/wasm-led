@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
+GUEST_ONLY=false
+if [[ "${1:-}" == "guest" ]]; then
+    GUEST_ONLY=true
+fi
+
 echo "========================================"
 echo "🛠  Building guest crate (wasm32 target)"
 echo "========================================"
@@ -18,8 +23,15 @@ echo
 echo "========================================"
 echo "🧩 Running compiler (Pulley)"
 echo "========================================"
-# This expects your compiler crate to be in the workspace
 cargo run -p compiler -- guest.component.wasm host/src/guest.pulley
+
+if $GUEST_ONLY; then
+    echo
+    echo "========================================"
+    echo "✅ Guest build completed successfully"
+    echo "========================================"
+    exit 0
+fi
 
 echo
 echo "========================================"

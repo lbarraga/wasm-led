@@ -1,11 +1,11 @@
 MEMORY {
     /*
-     * The RP2350 has either external or internal flash.
-     *
-     * 2 MiB is a safe default here, although a Pico 2 has 4 MiB.
+     * Total flash is 2048K. We carve out 4K for the Config sector 
+     * and 512K for the Wasm binary to prevent overlaps.
+     * 1532K (0x17F000) + 4K (0x1000) + 512K (0x80000) = 2048K.
      */
-    FLASH : ORIGIN = 0x10000000, LENGTH = 2048K
-
+    FLASH : ORIGIN = 0x10000000, LENGTH = 1532K
+    CONFIG_FLASH : ORIGIN = 0x1017F000, LENGTH = 4K
     WASM_FLASH : ORIGIN = 0x10180000, LENGTH = 512K
 
     /*
@@ -76,6 +76,14 @@ SECTIONS {
 
 
 SECTIONS {
+
+    .config_storage (NOLOAD) : ALIGN(4096)
+    {
+        __config_storage_start = .;
+        *(.config_storage)
+        __config_storage_end = .;
+    } > CONFIG_FLASH
+
     .wasm_storage (NOLOAD) : ALIGN(4096)
     {
         __wasm_storage_start = .;

@@ -20,6 +20,7 @@ embassy-rp = { version = "0.10.0", features = [
   "binary-info",
 ] }
 embassy-futures = "0.1.2"
+embassy-sync = "0.6.0"
 
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.5"
@@ -37,7 +38,7 @@ host-delay = { path = "../lib/host/delay" }
 
 cyw43 = { version = "0.7.0", features = ["defmt", "firmware-logs"] }
 cyw43-pio = { version = "0.10.0", features = ["defmt"] }
-embassy-net = { version = "0.9.1", features = ["defmt", "tcp", "dhcpv4", "medium-ethernet"] }
+embassy-net = { version = "0.9.1", features = ["defmt", "tcp", "udp", "dhcpv4", "medium-ethernet"] }
 static_cell = "2.1.0"
 
 [[bin]]
